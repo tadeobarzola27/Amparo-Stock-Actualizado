@@ -4,6 +4,8 @@ Dashboard en Streamlit que lee automáticamente una **Hoja de Google central**
 administrada por la oficina (solapa "Base Articulos") y muestra el stock
 actualizado, con filtros por Rubro, Familia, Marca y Proveedor. Las tiendas
 consultan la información desde el enlace publicado y no pueden subir archivos.
+La barra superior está configurada en modo `viewer`, por lo que las opciones de
+desarrollo y gestión de la aplicación no aparecen en la vista pública.
 
 ## Configurar el archivo central
 

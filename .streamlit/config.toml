@@ -1,0 +1,4 @@
+[client]
+# La aplicación pública funciona siempre en modo consulta. Oculta las
+# herramientas de desarrollo y la opción "Gestionar aplicación" del toolbar.
+toolbarMode = "viewer"

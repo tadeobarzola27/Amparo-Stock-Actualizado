@@ -25,11 +25,14 @@ from __future__ import annotations
 
 import hashlib
 import io
+import os
+import re
 from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
 import plotly.graph_objects as go
+import requests
 import streamlit as st
 
 from amparo_logic import (
@@ -52,6 +55,11 @@ BRAND = {
     "teal": "#118c7e",
 }
 
+DEFAULT_DATA_FILE_URL = (
+    "https://docs.google.com/spreadsheets/d/"
+    "1KqELEklzzrZrnL2cZ5VH0NDQdas_lkRe3SdPaoZYG0U/edit?usp=sharing"
+)
+
 HISTORY_FILE = Path(__file__).with_name("historial_amparo.csv")
 HISTORY_COLUMNS = ["fecha", "productos", "stock_acumulado", "stock_bajo", "sin_stock_neg", "rubros"]
 
@@ -69,14 +77,57 @@ def load_workbook_bytes(name: str, data: bytes) -> tuple[pd.DataFrame, pd.DataFr
     return parse_workbook_bytes(name, data)
 
 
-def file_signature(file) -> str:
-    """Huella del archivo subido, para no volver a grabar en el historial en
-    cada rerun de Streamlit (cada vez que se toca un filtro) — solo cuando
-    el contenido subido realmente cambia."""
+def file_signature(name: str, data: bytes) -> str:
+    """Huella del archivo central para no repetir snapshots en un rerun."""
     h = hashlib.sha256()
-    h.update(file.name.encode("utf-8", "ignore"))
-    h.update(file.getvalue())
+    h.update(name.encode("utf-8", "ignore"))
+    h.update(data)
     return h.hexdigest()
+
+
+def get_setting(name: str) -> str:
+    """Lee una configuración de Streamlit Secrets o del entorno local."""
+    try:
+        value = st.secrets.get(name, "")
+    except Exception:
+        value = ""
+    return str(value or os.getenv(name, "")).strip()
+
+
+def normalize_data_url(url: str) -> str:
+    """Convierte enlaces de Google Sheets o Drive en descargas Excel."""
+    if not url:
+        return url
+
+    sheet_match = re.search(r"/spreadsheets/d/([A-Za-z0-9_-]+)", url)
+    if sheet_match:
+        sheet_id = sheet_match.group(1)
+        return f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=xlsx"
+
+    file_match = re.search(r"/file/d/([A-Za-z0-9_-]+)", url)
+    id_match = re.search(r"[?&]id=([A-Za-z0-9_-]+)", url)
+    file_id = file_match.group(1) if file_match else (id_match.group(1) if id_match else "")
+    if file_id and ("drive.google.com" in url or "docs.google.com" in url):
+        return f"https://drive.usercontent.google.com/download?id={file_id}&export=download&confirm=t"
+    return url
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def download_central_workbook(url: str) -> tuple[str, bytes, str]:
+    """Descarga el Excel central. La caché se renueva cada cinco minutos."""
+    response = requests.get(normalize_data_url(url), timeout=90)
+    response.raise_for_status()
+    data = response.content
+    content_type = response.headers.get("content-type", "").lower()
+
+    if not data.startswith(b"PK") or "text/html" in content_type:
+        raise ValueError(
+            "El enlace no devolvió un archivo Excel. Verificá que el archivo de Drive "
+            "esté compartido como 'Cualquier persona con el enlace: Lector'."
+        )
+
+    updated = response.headers.get("last-modified") or datetime.now().strftime("%d/%m/%Y %H:%M")
+    return "Base_articulos.xlsx", data, updated
 
 
 def append_history(kpis: dict) -> None:
@@ -124,41 +175,45 @@ st.markdown(
     <div class="hero">
         <div class="eyebrow">Amparo · Gestión de mercadería</div>
         <h1>Inventario semanal</h1>
-        <p>Consulta rápida para pedidos de reposición de las 8 tiendas — a partir de Base_articulos.xlsx.</p>
+        <p>Consulta rápida para pedidos de reposición de las 8 tiendas — información centralizada por la oficina.</p>
     </div>
     """,
     unsafe_allow_html=True,
 )
 
-with st.expander("📥 Cargar Base_articulos.xlsx", expanded=True):
+data_file_url = get_setting("DATA_FILE_URL") or DEFAULT_DATA_FILE_URL
+
+refresh_col, source_col = st.columns([1, 4], vertical_alignment="center")
+with refresh_col:
+    if st.button("🔄 Actualizar datos", use_container_width=True):
+        download_central_workbook.clear()
+        load_workbook_bytes.clear()
+        st.rerun()
+with source_col:
     st.caption(
-        "Subí tu archivo Base_articulos.xlsx (el mismo que actualizás con la carga semanal en la "
-        "solapa 'Ingresos y Egresos semanal'). Se lee la solapa 'Base Articulos' — el Stock que se "
-        "muestra es siempre la columna StkActual, ya calculada dentro del Excel."
-    )
-    uploaded = st.file_uploader(
-        "Archivo de inventario",
-        type=["xlsx"],
-        accept_multiple_files=False,
-        label_visibility="collapsed",
-    )
-    guardar_historial = st.checkbox(
-        "Guardar un snapshot de este archivo en el historial de tendencia (pestaña Tendencia)",
-        value=True,
+        "Los datos se cargan automáticamente desde el archivo central administrado por la oficina. "
+        "Las tiendas no necesitan subir archivos."
     )
 
-if not uploaded:
-    st.info("Esperando Base_articulos.xlsx. Arrastralo o seleccionalo arriba para comenzar.")
+if not data_file_url:
+    st.error(
+        "La fuente central todavía no está configurada. La oficina debe agregar el enlace del "
+        "Excel en la variable privada DATA_FILE_URL de Streamlit."
+    )
     st.stop()
 
 try:
-    base_df, mov_df = load_workbook_bytes(uploaded.name, uploaded.getvalue())
-except ValueError as e:
-    st.error(str(e))
+    with st.spinner("Actualizando inventario desde la fuente central..."):
+        workbook_name, workbook_data, source_updated = download_central_workbook(data_file_url)
+        base_df, mov_df = load_workbook_bytes(workbook_name, workbook_data)
+except (requests.RequestException, ValueError) as e:
+    st.error(f"No se pudo actualizar el inventario central. {e}")
     st.stop()
 
+st.success(f"Inventario central disponible · última lectura: {source_updated}", icon="✅")
+
 if base_df.empty:
-    st.warning("No se pudo leer ningún producto de 'Base Articulos' en el archivo subido.")
+    st.warning("No se pudo leer ningún producto de 'Base Articulos' en el archivo central.")
     st.stop()
 
 filas_descartadas = base_df.attrs.get("filas_descartadas", 0)
@@ -252,11 +307,10 @@ if stock_min is not None:
 if stock_max is not None:
     filtered = filtered[filtered["stock_actual"].fillna(0) <= stock_max]
 
-if guardar_historial:
-    sig = file_signature(uploaded)
-    if st.session_state.get("last_history_sig") != sig:
-        append_history(compute_kpis(base_df, umbral_bajo))
-        st.session_state["last_history_sig"] = sig
+sig = file_signature(workbook_name, workbook_data)
+if st.session_state.get("last_history_sig") != sig:
+    append_history(compute_kpis(base_df, umbral_bajo))
+    st.session_state["last_history_sig"] = sig
 
 # ---------------------------------------------------------------------------
 # KPIs
@@ -434,13 +488,13 @@ with tab_tendencia:
         else:
             st.info(
                 "Todavía hay un solo snapshot guardado. Subí el archivo de la próxima semana "
-                "(con la casilla de historial tildada) para empezar a ver la tendencia."
+                "a la fuente central para empezar a ver la tendencia."
             )
     else:
-        st.info("Todavía no hay historial guardado. Tildá la casilla de historial al cargar un archivo.")
+        st.info("Todavía no hay historial guardado. Se generará al leer la fuente central.")
 
 st.caption(
-    "El archivo se procesa localmente en tu computadora al correr esta app: no se envía a "
-    "internet. · Columnas: Rubro · Código · Descripción · UxB · Stock (StkActual) · Familia · "
+    "Fuente: archivo central administrado por la oficina · Actualización automática cada 5 minutos. "
+    "Columnas: Rubro · Código · Descripción · UxB · Stock (StkActual) · Familia · "
     "Subfamilia · Marca · Proveedor."
 )

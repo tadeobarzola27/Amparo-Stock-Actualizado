@@ -1,8 +1,26 @@
 # Amparo · Inventario semanal
 
-Dashboard en Streamlit que lee directamente **Base_articulos.xlsx** (la
-solapa "Base Articulos") y muestra el stock actualizado de los 3.621
-productos, con filtros por Rubro, Familia, Marca y Proveedor.
+Dashboard en Streamlit que lee automáticamente una **Hoja de Google central**
+administrada por la oficina (solapa "Base Articulos") y muestra el stock
+actualizado, con filtros por Rubro, Familia, Marca y Proveedor. Las tiendas
+consultan la información desde el enlace publicado y no pueden subir archivos.
+
+## Configurar el archivo central
+
+La aplicación ya tiene configurada la Hoja de Google central. La planilla debe
+estar compartida como **Cualquier persona con el enlace: Lector** para que el
+servidor pueda descargarla.
+
+Opcionalmente, se puede reemplazar la fuente sin modificar el código desde
+Streamlit Community Cloud, en **App settings → Secrets**:
+
+```toml
+DATA_FILE_URL = "https://docs.google.com/spreadsheets/d/ID_DE_LA_PLANILLA/edit"
+```
+
+La aplicación vuelve a consultar el archivo automáticamente cada cinco minutos.
+También ofrece un botón **Actualizar datos** para forzar una lectura inmediata.
+Para actualizar el inventario, la oficina edita la Hoja de Google central.
 
 ## Cómo correrlo
 
@@ -11,12 +29,12 @@ pip install -r requirements.txt
 streamlit run amparo_dashboard.py
 ```
 
-Se abre en el navegador (`http://localhost:8501`). El archivo que subís se
-procesa localmente en tu computadora — no se manda a internet.
+Se abre en el navegador (`http://localhost:8501`) y toma los datos del archivo
+central configurado en `DATA_FILE_URL`.
 
-Cada semana: cargá los movimientos en la solapa "Ingresos y Egresos
-semanal" de tu Excel de siempre, guardalo, y subilo de nuevo acá para ver
-el stock actualizado.
+Cada semana: la oficina actualiza los movimientos en la solapa "Ingresos y
+Egresos semanal" de la Hoja de Google central. El dashboard publicado mostrará
+la nueva información sin que las tiendas deban subir nada.
 
 ## Qué se automatizó en el Excel
 
